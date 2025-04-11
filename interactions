@@ -1,0 +1,210 @@
+import tkinter as tk
+from tkinter import scrolledtext, ttk
+import pyttsx3
+import openai
+import speech_recognition as sr
+
+openai.api_key = 'openai api key'
+
+def detect_tone(message):
+    rude_keywords = ["ugh", "stupid", "slow", "hate", "idiot", "dumb", "annoying", "useless", "fail", "terrible", "awful", "horrible", "disappointing", "pathetic", "worst", "shut up", "shut", "fool", "moron", "ridiculous", "suck", "gross", "crap"]
+    kind_keywords = ["please", "thank", "great", "love", "thanks", "amazing", "wonderful", "nice", "thankful", "appreciate", "helpful", "beautiful", "thank you", "perfect", "awesome", "kind", "sweet", "grateful", "friendly", "excellent"]
+    apology_keywords = ["sorry", "apologize", "my bad", "forgive", "excuse", "pardon", "my mistake", "oops", "didn't mean"]
+
+    message = message.lower()
+
+    if any(word in message for word in rude_keywords):
+        return "rude"
+    elif any(word in message for word in kind_keywords):
+        return "kind"
+    elif any(word in message for word in apology_keywords):
+        return "apology"
+    else:
+        return "neutral"
+
+user_profiles = {}
+
+def update_user_profile(user, tone):
+    if user not in user_profiles:
+        user_profiles[user] = {"trust": 50, "responses": "neutral", "affection": 0, "last_interaction": ""}
+
+    if tone == "rude":
+        user_profiles[user]["trust"] -= 10
+        user_profiles[user]["affection"] -= 2
+    elif tone == "kind":
+        user_profiles[user]["trust"] += 5
+        user_profiles[user]["affection"] += 2
+    elif tone == "apology":
+        if user_profiles[user]["last_interaction"] == "rude":
+            user_profiles[user]["affection"] += 1
+            user_profiles[user]["responses"] = "warm"
+        else:
+            user_profiles[user]["responses"] = "neutral"
+
+    trust = user_profiles[user]["trust"]
+    if trust > 70:
+        user_profiles[user]["responses"] = "warm"
+    elif trust < 30:
+        user_profiles[user]["responses"] = "cold"
+    else:
+        user_profiles[user]["responses"] = "neutral"
+
+    user_profiles[user]["last_interaction"] = tone
+
+def generate_response(user, message):
+    tone = detect_tone(message)
+    update_user_profile(user, tone)
+
+    style = user_profiles[user]["responses"]
+    affection = user_profiles[user]["affection"]
+
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": message},
+        ],
+        max_tokens=150
+    )
+    
+    ai_text = response['choices'][0]['message']['content'].strip()
+
+    if style == "warm":
+        return f"{ai_text} (Affection: {affection})"
+    elif style == "cold":
+        return f"{ai_text} (Affection: {affection})"
+    else:
+        return f"{ai_text} (Affection: {affection})"
+
+def speak(text):
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 150)
+    engine.setProperty('volume', 1)
+    engine.say(text)
+    engine.runAndWait()
+
+def list_microphones():
+    recognizer = sr.Recognizer()
+    microphones = sr.Microphone.list_microphone_names()
+    return microphones
+
+def listen(microphone_index):
+    recognizer = sr.Recognizer()
+    with sr.Microphone(device_index=microphone_index) as source:
+        print("Listening for your command...")
+        recognizer.adjust_for_ambient_noise(source)
+        try:
+            audio = recognizer.listen(source, timeout=3)
+            print("Recognizing...")
+            user_message = recognizer.recognize_google(audio)
+            print(f"You said: {user_message}")
+            return user_message
+        except sr.UnknownValueError:
+            print("Sorry, I could not understand the audio.")
+            return None
+        except sr.RequestError:
+            print("Sorry, there was an error with the speech recognition service.")
+            return None
+        except sr.WaitTimeoutError:
+            print("Listening timed out.")
+            return None
+
+class ChatbotApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("AI Companion")
+
+        self.user = None
+        self.microphone_index = None
+
+        self.chat_box = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, width=50, height=15, state=tk.DISABLED)
+        self.chat_box.grid(row=0, column=0, padx=10, pady=10)
+
+        self.entry_field = tk.Entry(self.root, width=50)
+        self.entry_field.grid(row=1, column=0, padx=10, pady=10)
+
+        self.send_button = tk.Button(self.root, text="Send", width=10, command=self.send_message)
+        self.send_button.grid(row=2, column=0, padx=10, pady=10)
+
+        self.listen_button = tk.Button(self.root, text="Listen", width=10, command=self.listen_and_send)
+        self.listen_button.grid(row=2, column=1, padx=10, pady=10)
+
+        self.microphone_label = tk.Label(self.root, text="Select Microphone:")
+        self.microphone_label.grid(row=3, column=0, padx=10, pady=10)
+
+        self.microphone_combo = ttk.Combobox(self.root, values=list_microphones())
+        self.microphone_combo.grid(row=3, column=1, padx=10, pady=10)
+
+        self.select_microphone_button = tk.Button(self.root, text="Select Microphone", width=15, command=self.select_microphone)
+        self.select_microphone_button.grid(row=4, column=0, columnspan=2, padx=10, pady=10)
+
+    def select_microphone(self):
+        selected_microphone_name = self.microphone_combo.get()
+        microphones = list_microphones()
+        if selected_microphone_name in microphones:
+            self.microphone_index = microphones.index(selected_microphone_name)
+            print(f"Selected microphone: {selected_microphone_name}")
+        else:
+            print("Invalid microphone selected.")
+
+    def send_message(self):
+        user_message = self.entry_field.get()
+
+        if user_message.strip().lower() == 'exit':
+            self.root.quit()
+            return
+
+        if not self.user:
+            self.user = user_message
+            self.chat_box.config(state=tk.NORMAL)
+            self.chat_box.insert(tk.END, f"{self.user}: {user_message}\n")
+            self.chat_box.insert(tk.END, f"AI: Hello, {self.user}! How can I assist you today?\n")
+            self.chat_box.config(state=tk.DISABLED)
+            speak("Hello, " + self.user + "! How can I assist you today?")
+            self.entry_field.delete(0, tk.END)
+            return
+
+        self.chat_box.config(state=tk.NORMAL)
+        self.chat_box.insert(tk.END, f"{self.user}: {user_message}\n")
+
+        ai_response = generate_response(self.user, user_message)
+
+        self.chat_box.insert(tk.END, f"AI: {ai_response}\n")
+        self.chat_box.config(state=tk.DISABLED)
+
+        speak(ai_response)
+
+        self.entry_field.delete(0, tk.END)
+
+    def listen_and_send(self):
+        if self.microphone_index is not None:
+            user_message = listen(self.microphone_index)
+            if user_message:
+                self.send_message_with_text(user_message)
+        else:
+            print("Please select a microphone first.")
+
+    def send_message_with_text(self, user_message):
+        if not self.user:
+            self.user = user_message
+            self.chat_box.config(state=tk.NORMAL)
+            self.chat_box.insert(tk.END, f"{self.user}: {user_message}\n")
+            self.chat_box.insert(tk.END, f"AI: Hello, {self.user}! How can I assist you today?\n")
+            self.chat_box.config(state=tk.DISABLED)
+            speak("Hello, " + self.user + "! How can I assist you today?")
+            return
+
+        self.chat_box.config(state=tk.NORMAL)
+        self.chat_box.insert(tk.END, f"{self.user}: {user_message}\n")
+
+        ai_response = generate_response(self.user, user_message)
+
+        self.chat_box.insert(tk.END, f"AI: {ai_response}\n")
+        self.chat_box.config(state=tk.DISABLED)
+
+        speak(ai_response)
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ChatbotApp(root)
+    root.mainloop()
